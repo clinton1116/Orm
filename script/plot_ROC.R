@@ -27,7 +27,7 @@ update_gene_info <- function(se_obj, common_genes) {
 }
 
 # 3. 主函数：对单个数据集计算三种方法的 ROC 曲线
-process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_path) {
+process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_path, seurat_path) {
   cat("Processing", type, "dataset...\n")
   
   # 3.1 读入并归一化表达矩阵
@@ -38,6 +38,7 @@ process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_pa
   orm_pval      <- readRDS(orm_path)
   distinct_pval <- readRDS(distinct_path)
   scdd_pval     <- readRDS(scdd_path)
+  seurat_pval     <- readRDS(seurat_path)
   
   # 3.3 清理 ORM gene 名称
   pval_orm_genes <- clean_gene_names(orm_pval$gene)
@@ -74,6 +75,10 @@ process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_pa
   names(p_scdd_vec) <- scdd_pval$gene
   p_scdd_common <- p_scdd_vec[common_genes]
   
+  # 4.0 提取 seurat p 值子集
+  p_seurat_vec_adj <- seurat_pval$p_val_adj
+  names(p_seurat_vec_adj) <- seurat_pval$gene
+  p_seurat_common <- p_seurat_vec_adj[common_genes]
   # 3.10 构建结果数据框
   df <- data.frame(
     gene                  = common_genes,
@@ -81,6 +86,8 @@ process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_pa
     pvals_method_orm      = p_orm_common,
     pvals_method_distinct = p_distinct_common,
     pvals_method_scdd     = p_scdd_common,
+    pvals_method_seurat     = p_seurat_common,
+
     stringsAsFactors = FALSE
   )
   
@@ -88,25 +95,28 @@ process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_pa
   roc_orm <- roc(
     response  = df$truth,
     predictor = -df$pvals_method_orm,
-    percent   = TRUE, print.auc = TRUE, grid = TRUE,
+    percent   = TRUE
+  )
+  plot(
+    roc_orm,
+    print.auc = TRUE,
+    grid      = TRUE,
+    smooth    = TRUE,
+    col       = "red",
     xlab      = "False Positive Rate (%)",
     ylab      = "True Positive Rate (%)",
     main      = paste("ROC for", type, "Genes")
   )
   
-  roc_distinct <- roc(
-    response  = df$truth,
-    predictor = -df$pvals_method_distinct,
-    percent   = TRUE, print.auc = TRUE, grid = TRUE,
-    add       = TRUE, col = "blue"
-  )
+  roc_distinct <- roc(df$truth, -df$pvals_method_distinct, percent=TRUE)
+  plot(roc_distinct, add=TRUE, col="blue")
   
-  roc_scdd <- roc(
-    response  = df$truth,
-    predictor = -df$pvals_method_scdd,
-    percent   = TRUE, print.auc = TRUE, grid = TRUE,
-    add       = TRUE, col = "darkgreen"
-  )
+  
+  roc_scdd <- roc(df$truth, -df$pvals_method_scdd, percent=TRUE)
+  plot(roc_scdd, add=TRUE, col="darkgreen")
+  
+  roc_seurat <- roc(df$truth, -df$pvals_method_seurat, percent=TRUE)
+  plot(roc_seurat, add=TRUE, col="purple")
   
   # 3.12 画垂直参考线（FPR=5%）
   abline(v = 5, col = "darkgray", lwd = 2, lty = 2)
@@ -115,7 +125,7 @@ process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_pa
   legend(
     "bottomright",
     legend = c("ORM-based", "distinct-based", "scDD-based"),
-    col    = c("red", "blue", "darkgreen"),
+    col    = c("red", "blue", "darkgreen","purple"),
     lty    = 1, cex = 0.8
   )
   
@@ -123,35 +133,41 @@ process_dataset <- function(type, dataset_path, orm_path, distinct_path, scdd_pa
     df            = df,
     roc_orm       = roc_orm,
     roc_distinct  = roc_distinct,
-    roc_scdd      = roc_scdd
+    roc_scdd      = roc_scdd,
+    roc_seurat    = roc_seurat
+    
   )
 }
 
 # 4. 定义所有数据集路径（请酌情修改）
 dataset_files <- list(
   db = list(
-    dataset  = "/Users/linkun/Single-Cell_Projects/Orm/data/simdata/db_sim_data.rds",
-    orm      = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/orm_db_pval.rds",
-    distinct = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/distinct_db_pval.rds",
-    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_db_pval.rds"
+    dataset  = "/Users/linkun/Single-Cell_Projects/orm/data/simdata/db_sim_data.rds",
+    orm      = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/orm_db_pval.rds",
+    distinct = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/distinct_db_pval.rds",
+    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_db_pval.rds",
+    seurat   = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/seurat_db_pval.rds"
   ),
   de = list(
-    dataset  = "/Users/linkun/Single-Cell_Projects/Orm/data/simdata/de_sim_data.rds",
-    orm      = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/orm_de_pval.rds",
-    distinct = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/distinct_de_pval.rds",
-    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_de_pval.rds"
+    dataset  = "/Users/linkun/Single-Cell_Projects/orm/data/simdata/de_sim_data.rds",
+    orm      = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/orm_de_pval.rds",
+    distinct = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/distinct_de_pval.rds",
+    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_de_pval.rds",
+    seurat   = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/seurat_de_pval.rds"
   ),
   dm = list(
-    dataset  = "/Users/linkun/Single-Cell_Projects/Orm/data/simdata/dm_sim_data.rds",
-    orm      = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/orm_dm_pval.rds",
-    distinct = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/distinct_dm_pval.rds",
-    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_dm_pval.rds"
+    dataset  = "/Users/linkun/Single-Cell_Projects/orm/data/simdata/dm_sim_data.rds",
+    orm      = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/orm_dm_pval.rds",
+    distinct = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/distinct_dm_pval.rds",
+    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_dm_pval.rds",
+    seurat   = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/seurat_dm_pval.rds"
   ),
   dp = list(
-    dataset  = "/Users/linkun/Single-Cell_Projects/Orm/data/simdata/dp_sim_data.rds",
-    orm      = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/orm_dp_pval.rds",
-    distinct = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/distinct_dp_pval.rds",
-    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_dp_pval.rds"
+    dataset  = "/Users/linkun/Single-Cell_Projects/orm/data/simdata/dp_sim_data.rds",
+    orm      = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/orm_dp_pval.rds",
+    distinct = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/distinct_dp_pval.rds",
+    scdd     = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/scdd_dp_pval.rds",
+    seurat   = "/Users/linkun/Single-Cell_Projects/orm/data/P_val/seurat_dp_pval.rds"
   )
 )
 
@@ -165,7 +181,8 @@ for (type in names(dataset_files)) {
     dataset_files[[type]]$dataset,
     dataset_files[[type]]$orm,
     dataset_files[[type]]$distinct,
-    dataset_files[[type]]$scdd
+    dataset_files[[type]]$scdd,
+    dataset_files[[type]]$seurat
   )
   results_list[[type]] <- res
   cat("Finished processing", type, "\n")
@@ -185,12 +202,13 @@ for (type in names(results_list)) {
   )
   plot(res$roc_distinct, col = "blue",       add = TRUE)
   plot(res$roc_scdd,     col = "darkgreen",  add = TRUE)
+  plot(res$roc_seurat,     col = "purple",  add = TRUE)
   # FPR=5% 参考线（百分比坐标下就是 5）
   abline(v = 5, col = "darkgray", lwd = 2, lty = 2)
   legend(
     "bottomright",
-    legend = c("ORM-based", "distinct-based", "scDD-based"),
-    col    = c("red", "blue", "darkgreen"),
+    legend = c("ORM-based", "distinct-based", "scDD-based","seurat-based"),
+    col    = c("red", "blue", "darkgreen","purple"),
     lty    = 1, cex = 0.8
   )
 }
@@ -201,8 +219,11 @@ for (type in names(results_list)) {
   roc_orm      <- results_list[[type]]$roc_orm
   roc_distinct <- results_list[[type]]$roc_distinct
   roc_scdd     <- results_list[[type]]$roc_scdd
+  roc_seurat   <- results_list[[type]]$roc_seurat
+  
   cat("\n", type,
       "AUC ORM:     ", auc(roc_orm),
       "; AUC distinct:", auc(roc_distinct),
-      "; AUC scDD:    ", auc(roc_scdd), "\n")
+      "; AUC scDD:    ", auc(roc_scdd),
+      ";AUC seurat:     ", auc(roc_seurat),"\n")
 }

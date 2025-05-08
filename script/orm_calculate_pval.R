@@ -2,9 +2,12 @@
 library(SingleCellExperiment)
 library(rms)
 library(dplyr)
-
+library(BiocParallel)
+library(scuttle)
 set.seed(123)
-
+# 至少两个非 NA 的值
+dd <- datadist(data.frame(group = factor(c("A","B"))))
+options(datadist = "dd")
 ### 1. 定义 ormPval 函数
 ormPval <- function(x){
   if (length(x$fail) && x$fail) {
@@ -45,22 +48,25 @@ ormPval <- function(x){
 ### 2. 定义 compute_pvals() 函数
 # 该函数接收一个 SingleCellExperiment 对象 se_obj 和一个可选参数 cat_filter，
 # 如果 cat_filter 非 NULL，则只计算 metadata 中 gene_info$category 为该类别的基因 p 值。
-compute_pvals <- function(se_obj, cat_filter = NULL) {
+compute_pvals <- function(se_obj, norm_method = c("logcounts", "cpm", "linnorm"),cat_filter = NULL,ncores = 4) {
   # 若数据未标准化，则使用 logNormCounts 进行标准化（内部覆盖）
-  se_obj <- logNormCounts(se_obj)
+  norm_method <- match.arg(norm_method)
+  if(norm_method == "logcounts"){
+    assay_name <- "logcounts"
+  } else if(norm_method == "cpm"){
+    assay_name <- "cpm"
+  } else if(norm_method == "linnorm"){
+    assay_name <- "linnorm"
+  }
   
   # 提取 logcounts 表达矩阵和细胞分组信息（group_id）
-  expr <- assay(se_obj, "logcounts")
+  expr <- assay(se_obj, assay_name)
   group <- colData(se_obj)$group_id
   
   # 从 metadata 中获取 gene_info，并根据 cat_filter 取要处理的基因列表
   gene_info <- metadata(se_obj)$gene_info
-  if (!is.null(cat_filter)) {
-    genes_to_use <- gene_info$gene[gene_info$category == cat_filter]
-  } else {
-    genes_to_use <- rownames(expr)
-  }
-  
+  keep1 <- (rowSums(expr>0)>=20) & (apply(expr,1,var) > 0.05)
+  expr <- expr[keep1,]
   # 过滤掉全 NA 的基因以及表达恒定（标准差为 0）的基因
   na_genes <- apply(expr, 1, function(x) all(is.na(x)))
   constant_genes <- apply(expr, 1, function(x) {
@@ -70,35 +76,26 @@ compute_pvals <- function(se_obj, cat_filter = NULL) {
   
   # 对表达矩阵进行过滤
   filtered_expr <- expr[!na_genes & !constant_genes, , drop = FALSE]
-  
-  # 如果指定了基因类别，则仅保留过滤后中与该类别交集的基因
-  if (!is.null(cat_filter)) {
-    filtered_expr <- filtered_expr[intersect(rownames(filtered_expr), genes_to_use), , drop = FALSE]
-  }
-  
+  BPPARAM <- MulticoreParam(workers = ncores)
   # 对每个基因计算 p 值（利用 sapply 遍历行名）
-  pvals <- sapply(rownames(filtered_expr), function(gene) {
+  pvals_list <- bplapply(rownames(filtered_expr), function(gene) {
     gene_expr <- filtered_expr[gene, ]
-    # 构造数据框，包含该基因表达和分组信息
     dat <- data.frame(expr = gene_expr, group = factor(group))
-    # 拟合模型：表达 ~ group，使用 orm()（来自 rms 包）
-    dd <- datadist(dat)
-    assign("dd", dd, envir = .GlobalEnv)
-    options(datadist = "dd")
-    fit <- orm(expr ~ group, data = dat, x = TRUE, y = TRUE)
-    # 计算 p 值（ormPval 返回一个向量，通常第二个值对应 group 变量的检验）
+    
+    
+    fit <- orm(expr ~ group, data = dat, x=TRUE, y=TRUE)
     p <- ormPval(fit)
-    if (length(p) > 1) {
-      return(p[2])
-    } else {
-      return(p)
-    }
-  })
+    if (length(p)>1) p[2] else p
+  }, BPPARAM = BPPARAM)
+  
+  pvals <- unlist(pvals_list)
+  names(pvals) <- rownames(filtered_expr)
+  
+  data.frame(gene = names(pvals), pvalue = pvals, row.names = NULL)
+}
   
   # 整理结果数据框：gene 名称与对应的 p 值
-  results <- data.frame(gene = names(pvals), pvalue = pvals, row.names = NULL)
-  return(results)
-}
+
 
 ### 3. 主流程：处理不同差异分布数据集并保存结果
 # 假设以下 RDS 文件已存在，包含对应的 SingleCellExperiment 数据集
@@ -112,15 +109,19 @@ de <- readRDS("/Users/linkun/Single-Cell_Projects/Orm/data/simdata/de_sim_data.r
 dp <- readRDS("/Users/linkun/Single-Cell_Projects/Orm/data/simdata/dp_sim_data.rds")
 dm <- readRDS("/Users/linkun/Single-Cell_Projects/Orm/data/simdata/dm_sim_data.rds")
 db <- readRDS("/Users/linkun/Single-Cell_Projects/Orm/data/simdata/db_sim_data.rds")
+datasets <- list(de = de, dp = dp, dm = dm, db = db)
 
-# 分别计算各数据集对应类别（de, dp, dm, db）的 p 值
-res_de <- compute_pvals(de, cat_filter = NULL)
-res_dp <- compute_pvals(dp, cat_filter = NULL)
-res_dm <- compute_pvals(dm, cat_filter = NULL)
-res_db <- compute_pvals(db, cat_filter = NULL)
 
-# 将结果保存到各自的 RDS 文件中
-saveRDS(res_de, file = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/de_pval.rds")
-saveRDS(res_dp, file = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/dp_pval.rds")
-saveRDS(res_dm, file = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/dm_pval.rds")
-saveRDS(res_db, file = "/Users/linkun/Single-Cell_Projects/Orm/data/P_val/db_pval.rds")
+
+norm_methods <- c("logcounts", "cpm", "linnorm")
+for(ds_name in names(datasets)){
+  se_obj <- datasets[[ds_name]]
+  for(nm in norm_methods){
+    message("Processing ", ds_name, " with ", nm, "...")
+    res <- compute_pvals(se_obj, norm_method = nm, ncores = 8)
+    saveRDS(res,
+            file = file.path(out_dir, paste0(ds_name, "_", nm, "_pval.rds")))
+  }
+}
+
+#

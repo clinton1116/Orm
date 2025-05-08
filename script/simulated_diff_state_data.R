@@ -10,7 +10,7 @@ sce_ref <- readRDS("/Users/linkun/Single-Cell_Projects/distinct_manuscript-main/
 # 设置公共参数
 ng <- nrow(sce_ref)    # 使用参考数据中的所有基因数
 nc <- 7200             # 模拟 7200 个细胞（两组各 3600 个）
-ns <- 2                # 2 个样本（每个样本对应一个组，非配对设计）
+ns <- 5                # 2 个样本（每个样本对应一个组，非配对设计）
 nk <- 1                # 只模拟一个 cluster
 probs_val <- list(NULL, NULL, c(0.5, 0.5))  # 每组细胞比例均等
 dd_val <- TRUE         # 开启差异分布模拟
